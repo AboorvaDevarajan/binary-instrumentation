@@ -14,20 +14,18 @@ int trace_fn() {
 }
 
 int test_hook() {
-
 	printf("In testing hook function... \n");
 }
 
 int main() {
 
     printf("------------------------------------\n");
-	printf("Hooking function...\n");
-	printf("------------------------------------\n");
-	printf("before hooking the test_hook() function\n");
-	printf("calling test_hook()...\n");
-	test_hook();
-	printf("returned from test_hook()...\n");	
-
+    printf("Hooking function...\n");
+    printf("------------------------------------\n");
+    printf("before hooking the test_hook() function\n");
+    printf("calling test_hook()...\n");
+    test_hook();
+    printf("returned from test_hook()...\n");	
     
     printf("------------------------------------\n");
     printf("Patching the test_hook() function using binary instrumentation\n");
