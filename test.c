@@ -24,7 +24,8 @@ typedef enum {
     INPROGRESS = 1,
     ERR_BUSY = 3,
     INVALID_ADDR = 4,
-    NO_DEVICE = 5
+    NO_DEVICE = 5,
+    ERR_INVALID_PARAM = 6
 } status_t;
 
 typedef struct bistro_jmp_rax_patch {
@@ -106,6 +107,10 @@ void *override_test_m(void) {
 	printf("hooked test_m function\n");
 }
 
+
+void test_m(void) {
+    printf("original test_m\n");
+}
 void override_malloc(size_t size) {
  	malloc(size);
 }
@@ -117,7 +122,7 @@ void override_malloc(size_t size) {
         .prev_value = _name \
     }
 static mmap_func_t mmap_funcs[] = {
-    { MMAP_RELOC_ENTRY(malloc), EVENT_MMAP,    EVENT_NONE},
+    { MMAP_RELOC_ENTRY(test_m), EVENT_MMAP,    EVENT_NONE},
 /*  { MMAP_RELOC_ENTRY(mmap),    EVENT_MMAP,    EVENT_NONE},
     { MMAP_RELOC_ENTRY(munmap),  EVENT_MUNMAP,  EVENT_NONE},
     { MMAP_RELOC_ENTRY(shmat),   EVENT_SHMAT,   EVENT_NONE},
@@ -204,6 +209,13 @@ typedef struct {
 
 #define align_up_pow2(_n, _alignment) \
     align_down_pow2((_n) + (_alignment) - 1, _alignment)
+
+#define align_down(_n, _alignment) \
+    ( (_n) - ((_n) % (_alignment)) )
+      
+#define PROT_READ_WRITE_EXEC (PROT_READ | PROT_WRITE | PROT_EXEC)
+#define PROT_READ_EXEC       (PROT_READ | PROT_EXEC)
+        
 
 size_t get_page_size();
 size_t get_page_size()
@@ -587,6 +599,77 @@ bistro_construct_orig_func(const void *func_ptr, size_t patch_len,
 
     return OK;
 }
+
+
+status_t bistro_create_restore_point(void *addr, size_t len,
+                                             bistro_restore_point_t **rp)
+{
+    bistro_restore_point_t *point;
+    
+    if (rp == NULL) { 
+        /* restore point is not required */
+        return OK;
+    }
+
+    point = malloc(sizeof(*point) + len);
+    if (point == NULL) {
+        return INVALID_ADDR;
+    }
+
+    *rp              = point;
+    point->addr      = addr;
+    point->patch_len = len;
+    memcpy(point->orig, addr, len);
+    
+    return OK;
+}   
+
+static void *bistro_page_align_ptr(void *ptr)
+{   
+    return (void*)align_down((uintptr_t)ptr, get_page_size());
+}
+    
+static status_t bistro_protect(void *addr, size_t len, int prot)
+{   
+    void *aligned = bistro_page_align_ptr(addr);
+    size_t size   = PTR_BYTE_DIFF(aligned, addr) + len;
+    int res;
+    
+    res = mprotect(aligned, size, prot) ? ERR_INVALID_PARAM : OK;
+    if (res) {
+        printf("Failed to change page protection: %m\n");
+        return ERR_INVALID_PARAM;
+    }
+    
+    return OK;
+}
+
+static inline void clear_cache(void *start, void *end)
+{   
+
+    __clear_cache(start, end);
+
+}
+
+    
+status_t bistro_apply_patch(void *dst, void *patch, size_t len)
+{   
+    status_t status;
+
+    status = bistro_protect(dst, len, PROT_READ_WRITE_EXEC);
+    if (status != OK) {
+        return status;
+    }   
+    
+    memcpy(dst, patch, len);
+
+    status = bistro_protect(dst, len, PROT_READ_EXEC);
+    if (status != OK) {
+        clear_cache(dst, PTR_BYTE_OFFSET(dst, len));
+    }
+    return status;
+}        
+
 status_t bistro_patch(void *func_ptr, void *hook, const char *symbol, void **orig_func_p,
                       bistro_restore_point_t **rp) {
     bistro_jmp_rax_patch_t jmp_rax   = {
@@ -628,7 +711,13 @@ status_t bistro_patch(void *func_ptr, void *hook, const char *symbol, void **ori
     } else {
         printf("else\n");
     }
-    return OK;
+    status = bistro_create_restore_point(func_ptr, patch_len, rp);
+    if (status != OK) {
+        return status;
+    }
+
+    return bistro_apply_patch(func_ptr, patch, patch_len);
+
 }
 
 
@@ -669,18 +758,20 @@ int main(int argc, char **argv) {
          func_ptr = reloc_get_orig(entry->patch.symbol,
                                           entry->patch.value);
 
-	 if (func_ptr == NULL) {
-		 printf("return value is NULL\n");
-	 } else{ 
+	// if (func_ptr == NULL) {
+		// printf("return value is NULL\n");
+//	 } else{ 
                 status = bistro_patch(func_ptr, entry->patch.value,
-                                          entry->patch.symbol, func_ptr, NULL);
-	 }
+                                          entry->patch.symbol, NULL, NULL);
+	// }
         if (status != OK) {
             printf("failed to install hook for '%s'\n",
                      entry->patch.symbol);
             return status;
         }
     }
+    
+    test_m();
     return 0;
 }
 
