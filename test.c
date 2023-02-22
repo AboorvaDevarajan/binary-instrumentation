@@ -49,6 +49,7 @@ typedef struct bistro_restore_point bistro_restore_point_t;
 
 typedef struct reloc_patch {
     const char       *symbol;
+    void             *original_ptr;
     void             *value;
     void             *prev_value;
 } reloc_patch_t;
@@ -88,6 +89,14 @@ typedef struct mmap_func {
     event_type_t     deps;
 } mmap_func_t;
 
+void *override_test_local(void) {
+    printf("override m1\n");
+}
+    
+void test_local(void) {
+    printf("m1\n");
+}
+
 void *override_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int override_munmap(void *addr, size_t length);
 void *override_mremap(void *old_address, size_t old_size, size_t new_size, int flags);
@@ -96,21 +105,22 @@ int override_shmdt(const void *shmaddr);
 void *override_sbrk(intptr_t increment);
 int override_brk(void *addr);
 int override_madvise(void *addr, size_t length, int advice);
-void *override_test_m(void);
+//void *override_test_m(void);
 void override_malloc(size_t);
 
 void *override_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-	mmap(addr, length, prot, flags, fd, offset);
+	printf("override mmpa\n");
+//	mmap(addr, length, prot, flags, fd, offset);
 }
 
-void *override_test_m(void) {
+/*void *override_test_m(void) {
 	printf("hooked test_m function\n");
-}
+}*/
 
 
-void test_m(void) {
+/*void test_m(void) {
     printf("original test_m\n");
-}
+}*/
 void override_malloc(size_t size) {
  	malloc(size);
 }
@@ -118,11 +128,13 @@ void override_malloc(size_t size) {
 #define MMAP_RELOC_ENTRY(_name) \
     { \
         .symbol     = #_name, \
+        .original_ptr = &_name, \
         .value      = override_##_name, \
         .prev_value = _name \
     }
 static mmap_func_t mmap_funcs[] = {
-    { MMAP_RELOC_ENTRY(test_m), EVENT_MMAP,    EVENT_NONE},
+    { MMAP_RELOC_ENTRY(test_local), EVENT_MMAP,    EVENT_NONE},
+  /*  { MMAP_RELOC_ENTRY(test_shared), EVENT_MUNMAP,    EVENT_NONE},    */
 /*  { MMAP_RELOC_ENTRY(mmap),    EVENT_MMAP,    EVENT_NONE},
     { MMAP_RELOC_ENTRY(munmap),  EVENT_MUNMAP,  EVENT_NONE},
     { MMAP_RELOC_ENTRY(shmat),   EVENT_SHMAT,   EVENT_NONE},
@@ -607,12 +619,17 @@ status_t bistro_create_restore_point(void *addr, size_t len,
     bistro_restore_point_t *point;
     
     if (rp == NULL) { 
+	    printf("restore point is not required\n");
         /* restore point is not required */
         return OK;
     }
+    printf("size res : %zu\n", (sizeof(*point) + len));
+    
 
     point = malloc(sizeof(*point) + len);
     if (point == NULL) {
+	    printf("point == nu;;\n");
+
         return INVALID_ADDR;
     }
 
@@ -651,73 +668,42 @@ static inline void clear_cache(void *start, void *end)
 
 }
 
-    
+
 status_t bistro_apply_patch(void *dst, void *patch, size_t len)
 {   
     status_t status;
-
-    status = bistro_protect(dst, len, PROT_READ_WRITE_EXEC);
+    
+    status = bistro_protect(dst, 4096, PROT_READ|PROT_WRITE|PROT_EXEC);
     if (status != OK) {
         return status;
-    }   
-    
-    memcpy(dst, patch, len);
-
-    status = bistro_protect(dst, len, PROT_READ_EXEC);
-    if (status != OK) {
-        clear_cache(dst, PTR_BYTE_OFFSET(dst, len));
     }
+    memcpy(dst, patch, 8);
     return status;
 }        
 
 status_t bistro_patch(void *func_ptr, void *hook, const char *symbol, void **orig_func_p,
                       bistro_restore_point_t **rp) {
-    bistro_jmp_rax_patch_t jmp_rax   = {
-        .mov_rax = {0x48, 0xb8},
-        .jmp_rax = {0xff, 0xe0}
-    };
-    bistro_jmp_near_patch_t jmp_near = {
-        .jmp_rel = 0xe9
-    };
-
-    void *patch, *jmp_base;
-    status_t status;
-    ptrdiff_t jmp_disp;
-    size_t patch_len;
+    void *hook_fn = &override_malloc;
+    void *main_fn = &malloc;
+    uint32_t jump_address = (uint32_t)(((uintptr_t)hook) - ((uintptr_t)func_ptr)) - 5;
+    uint8_t jmp = 0xe9;
+  //  uint8_t jump_patch[8];
+  //  memcpy(&jump_patch[0], &jmp, sizeof(uint8_t));
+  //  memcpy(&jump_patch[1], &jump_address, 8);
     
-    jmp_base = PTR_BYTE_OFFSET(func_ptr, sizeof(jmp_near));
-    jmp_disp = PTR_BYTE_DIFF(jmp_base, hook);
-
-    printf("bistro patching implementation 1\n");
-
-    if (labs(jmp_disp) < INT32_MAX) {
-      printf("jmp near\n");
-      jmp_near.disp = jmp_disp;
-      patch         = &jmp_near;
-      patch_len     = sizeof(jmp_near);
-    } else {
-      printf("jmp far\n");
-      jmp_rax.ptr = hook;
-      patch       = &jmp_rax;
-      patch_len   = sizeof(jmp_rax);
-    }   
-
-    if (orig_func_p != NULL) { 
-        status = bistro_construct_orig_func(func_ptr, patch_len, symbol,
-                                                orig_func_p);
-        if (status != OK) {
-            return status;
-        }
-    } else {
-        printf("else\n");
-    }
-    status = bistro_create_restore_point(func_ptr, patch_len, rp);
-    if (status != OK) {
-        return status;
-    }
-
-    return bistro_apply_patch(func_ptr, patch, patch_len);
-
+    uint8_t jump_patch[12];
+    uint8_t mov_rax1 = 0x48;
+    uint8_t mov_rax2 = 0xb8;
+    uint8_t jmp_rax1 = 0xff;
+    uint8_t jmp_rax2 = 0xe0;        
+    
+    memcpy(&jump_patch[0], &mov_rax1, sizeof(uint8_t));
+    memcpy(&jump_patch[1], &mov_rax2, sizeof(uint8_t));    
+    memcpy(&jump_patch[10], &jmp_rax1, sizeof(uint8_t));    
+    memcpy(&jump_patch[11], &jmp_rax2, sizeof(uint8_t));    
+    memcpy(&jump_patch[2], &jump_address, 8);
+                     
+    return bistro_apply_patch(func_ptr, &jump_patch, 8);
 }
 
 
@@ -728,9 +714,12 @@ reloc_get_orig(const char *symbol, void *replacement)
     void *func_ptr;
 
     func_ptr = dlsym(RTLD_NEXT, symbol);
+    printf("func_ptr : %p\n", func_ptr);
     if (func_ptr == NULL) {
         (void)dlerror();
         func_ptr = dlsym(RTLD_DEFAULT, symbol);
+	printf("func_ptr : %p %s\n", func_ptr, symbol);
+
         if (func_ptr == replacement) {
             error = dlerror();
             printf("could not find address of original %s(): %s\n", symbol,
@@ -752,26 +741,31 @@ int main(int argc, char **argv) {
     status_t status = OK;
 
     for (entry = mmap_funcs; entry->patch.symbol != NULL; ++entry) {
-         printf("mmap: installing bistro hook for %s = %p for event 0x%x\n",
+         printf("mmap: installing bistro hook for %s = %p for event 0x%x orig : %p\n",
                   entry->patch.symbol, entry->patch.value,
-                  entry->event_type);
-         func_ptr = reloc_get_orig(entry->patch.symbol,
-                                          entry->patch.value);
+                  entry->event_type, entry->patch.original_ptr);
 
-	// if (func_ptr == NULL) {
-		// printf("return value is NULL\n");
-//	 } else{ 
-                status = bistro_patch(func_ptr, entry->patch.value,
-                                          entry->patch.symbol, NULL, NULL);
-	// }
+
+	    if (func_ptr == NULL) {
+	        printf("return value is NULL\n");
+	    } else  { 
+            status = bistro_patch( entry->patch.original_ptr, entry->patch.value,
+                                       entry->patch.symbol, NULL, NULL);
+	    }
+	    printf("applied patch\n");
         if (status != OK) {
             printf("failed to install hook for '%s'\n",
                      entry->patch.symbol);
             return status;
-        }
+        } else {
+		    printf("success\n");
+    	}
     }
+    printf("done\n");
+    //malloc(10);    
+    test_local();
+    printf("done again\n");
     
-    test_m();
     return 0;
 }
 

@@ -3,10 +3,11 @@ HEADERS =
 default: test
 
 test.o: test.c $(HEADERS)
-	gcc -ldl -lrt -c test.c -o test.o
+	gcc -g *.c -c -fPIC
+	gcc -g foo.o -shared -o libfoo.so
 
 test: test.o
-	gcc -ldl -lrt test.o -o test
+	gcc -g -ldl -L`pwd` test.c -lfoo -o test
 
 clean:
 	-rm -f test.o
