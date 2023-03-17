@@ -50,3 +50,10 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+
+# bin and obj directories
+bin/*
+!bin/.gitkeep
+obj/*
+!obj/.gitkeep
