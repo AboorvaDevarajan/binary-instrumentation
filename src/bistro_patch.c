@@ -227,7 +227,6 @@ status_t bistro_patch(void *func_ptr, void *hook, const char *symbol, void **ori
     };
 
     void *patch, *jmp_base;
-    status_t status;
     ptrdiff_t jmp_disp;
     size_t patch_len;    
 
@@ -246,16 +245,7 @@ status_t bistro_patch(void *func_ptr, void *hook, const char *symbol, void **ori
         patch       = &jmp_rax;
         patch_len   = sizeof(jmp_rax);
     }
-
-
     return bistro_apply_patch(func_ptr, patch, patch_len);
-}
-
-status_t far_patch(void *src, void *dst, size_t size)
-{
-    uint8_t far_patch_buffer[] = {_MEM_MOVABS_RAX, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, _MEM_JMP_RAX};
-    *(uintptr_t *)((uintptr_t)far_patch_buffer + sizeof(MEM_MOV_REGAX)) = (uintptr_t)dst;
-    memcpy(src, far_patch_buffer, sizeof(far_patch_buffer));
 }
 
 int main(int argc, char **argv)
@@ -265,7 +255,7 @@ int main(int argc, char **argv)
     debug_printf("main: Initializing patching structures..\n");
 
     func_t *entry;
-    void *func_ptr;
+    void *func_ptr = NULL;
     status_t status = OK;
 
     debug_printf("main: Before applying binary instrumentation patch...\n");
@@ -302,8 +292,12 @@ int main(int argc, char **argv)
     }
 
     debug_printf("main: After applying binary instrumentation patch...\n");
+    
+    /* Near Jumps */
     foo();
     bar();
+
+    /* Far Jumps */
     shared_foo();
     return 0;
 }
