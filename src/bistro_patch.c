@@ -90,7 +90,7 @@ typedef struct bistro_jmp_rax_patch
     uint8_t mov_rax[2]; /* mov %rax, addr */
     void *ptr;
     uint8_t jmp_rax[2]; /* jmp rax        */
-} bistro_jmp_rax_patch_t;
+} __attribute__((packed)) bistro_jmp_rax_patch_t;
 
 typedef struct bistro_jmp_near_patch
 {
@@ -153,6 +153,7 @@ void foo(void)
 static func_t funcs[] = {
     {MMAP_RELOC_ENTRY(foo), EVENT_FOO, EVENT_NONE},
     {MMAP_RELOC_ENTRY(bar), EVENT_BAR, EVENT_NONE},
+    {MMAP_RELOC_ENTRY(shared_foo), EVENT_BAR, EVENT_NONE},
     {{NULL, NULL, NULL}, EVENT_NONE}};
 
 size_t get_page_size();
@@ -220,6 +221,10 @@ status_t bistro_patch(void *func_ptr, void *hook, const char *symbol, void **ori
     bistro_jmp_near_patch_t jmp_near = {
         .jmp_rel = 0xe9
     };
+    bistro_jmp_rax_patch_t jmp_rax   = {
+        .mov_rax = {0x48, 0xb8},
+        .jmp_rax = {0xff, 0xe0}
+    };
 
     void *patch, *jmp_base;
     status_t status;
@@ -236,7 +241,13 @@ status_t bistro_patch(void *func_ptr, void *hook, const char *symbol, void **ori
         jmp_near.disp = (uint32_t) jmp_disp;
         patch         = &jmp_near;
         patch_len     = sizeof(jmp_near);
-    }    
+    } else {
+        jmp_rax.ptr = hook;
+        patch       = &jmp_rax;
+        patch_len   = sizeof(jmp_rax);
+    }
+
+
     return bistro_apply_patch(func_ptr, patch, patch_len);
 }
 
@@ -289,8 +300,6 @@ int main(int argc, char **argv)
             debug_printf("main: calling original functions\n");
         }
     }
-
-    far_patch(shared_foo, override_shared_foo, 12);
 
     debug_printf("main: After applying binary instrumentation patch...\n");
     foo();
